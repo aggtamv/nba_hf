@@ -1,13 +1,17 @@
 // Prediction page: calls the Hugging Face Space (aggtamv/nba_plusminus) DIRECTLY
-// from the browser via the Gradio JS client. No Flask backend involved.
+// from the browser via the Gradio REST API (plain fetch, no @gradio/client).
+//
+// We avoid the Gradio JS client because its /config resolution step fetches with
+// credentials:"include", which HF's cross-origin (hf.space) CORS rejects from the
+// github.io origin. Plain fetch sends no credentials cross-origin, so HF's
+// wildcard CORS is accepted. Flow: /gradio_api/upload -> /call -> SSE result.
 //
 // Two input flows, both hitting the model's /predict_from_csv endpoint:
 //   1. Player tab  -> look up the player's precomputed last-10x20 matrix
 //                     (data/players_predict.json), build a CSV in-memory, send it.
 //   2. CSV Upload  -> send the user's uploaded file straight to the model.
-import { Client } from "https://esm.sh/@gradio/client@1.10.0";
-
-const SPACE = "aggtamv/nba_plusminus";
+const SPACE_URL = "https://aggtamv-nba-plusminus.hf.space";
+const API = `${SPACE_URL}/gradio_api`;
 
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -15,7 +19,6 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
 const resultArea = document.getElementById("result-area");
 const predictBtn = document.getElementById("predict-btn");
 
-let clientPromise = null;         // lazy, reused across predictions
 let predictData = { columns: [], players: {} };
 
 // --- Load precomputed player matrices + name list -------------------------
@@ -113,16 +116,54 @@ function setBusy(busy, label) {
   predictBtn.textContent = busy ? (label || "Predicting…") : "Predict";
 }
 
-async function getClient() {
-  if (!clientPromise) clientPromise = Client.connect(SPACE);
-  return clientPromise;
+// Parse a Gradio SSE stream body and return the payload after `event: complete`.
+function parseGradioSse(text) {
+  let complete = false;
+  let lastData = null;
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (line.startsWith("event:")) {
+      complete = line.includes("complete");
+      if (line.includes("error")) throw new Error("The model returned an error.");
+    } else if (line.startsWith("data:")) {
+      const payload = line.slice(5).trim();
+      lastData = payload;
+      if (complete) break;
+    }
+  }
+  if (lastData == null) throw new Error("Empty response from the model.");
+  const parsed = JSON.parse(lastData);
+  return Array.isArray(parsed) ? parsed[0] : parsed;
 }
 
 async function predictFromFile(file) {
-  const app = await getClient();
-  const out = await app.predict("/predict_from_csv", { file });
-  // Textbox return -> out.data[0]
-  return Array.isArray(out.data) ? out.data[0] : out.data;
+  // 1. Upload the file to the Space (multipart, CORS-safelisted -> no preflight).
+  const fd = new FormData();
+  fd.append("files", file);
+  const upRes = await fetch(`${API}/upload`, { method: "POST", body: fd });
+  if (!upRes.ok) throw new Error(`Upload failed (HTTP ${upRes.status}).`);
+  const paths = await upRes.json();
+  const serverPath = Array.isArray(paths) ? paths[0] : paths;
+
+  // 2. Start the prediction; the file arg is a Gradio FileData reference.
+  const fileData = {
+    path: serverPath,
+    meta: { _type: "gradio.FileData" },
+    orig_name: file.name,
+    url: `${API}/file=${serverPath}`,
+  };
+  const callRes = await fetch(`${API}/call/predict_from_csv`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data: [fileData] }),
+  });
+  if (!callRes.ok) throw new Error(`Prediction request failed (HTTP ${callRes.status}).`);
+  const { event_id } = await callRes.json();
+
+  // 3. Read the result stream (a sleeping Space can take ~30s to wake here).
+  const streamRes = await fetch(`${API}/call/predict_from_csv/${event_id}`);
+  if (!streamRes.ok) throw new Error(`Result stream failed (HTTP ${streamRes.status}).`);
+  return parseGradioSse(await streamRes.text());
 }
 
 // --- Submit ---------------------------------------------------------------
