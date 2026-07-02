@@ -1,7 +1,7 @@
 # NBA Player Performance — Static (GitHub Pages) build
 
-A **fully static** version of the Flask app, designed to run on **GitHub Pages**
-at **zero cost**. It has no server and no database. Instead:
+A **fully static** version of the Flask app, designed to run on **GitHub Pages**.
+It has no server and no database. Instead:
 
 - **Stats & dashboard data** are pre-exported to JSON (`data/*.json`) at build time.
 - **Predictions** are made by calling the Hugging Face Space
@@ -17,17 +17,6 @@ GitHub Pages (static)                 Hugging Face Space (model API)
 │ @gradio/client ────────────┼─POST──▶│  /predict_from_csv → text  │
 └───────────────────────────┘        └────────────────────────────┘
 ```
-
-## What changed vs. the Flask app
-
-| Flask feature | Static build |
-|---|---|
-| Google OAuth / login | **Removed** — no protected data to guard |
-| SQLite + SQLAlchemy | **Removed** — data pre-exported to JSON |
-| Server-rendered Jinja templates | Plain HTML + vanilla JS (`js/*.js`) |
-| Dash app at `/stats/` | Plotly.js reading `data/stats.json` |
-| Live scraping per request | Pre-exported snapshot (refresh via `export_data.py`) |
-| `/predict` via Python Gradio client | `@gradio/client` in the browser (same endpoint) |
 
 ## Files
 
@@ -94,14 +83,6 @@ cd static_page
 python -m http.server 8000
 # then visit http://localhost:8000
 ```
-
-## Deploying to GitHub Pages
-
-1. Push this repo to GitHub.
-2. Repo **Settings → Pages → Build and deployment → Source: GitHub Actions**.
-3. The workflow [`.github/workflows/deploy-pages.yml`](../.github/workflows/deploy-pages.yml)
-   publishes `static_page/` on every push that touches it. The live URL appears
-   in the workflow run summary.
 
 ## Notes / limitations
 
