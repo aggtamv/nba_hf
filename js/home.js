@@ -1,5 +1,8 @@
 // Home dashboard: metrics, daily games with quarter boxscores, searchable totals table.
 (async function () {
+  // Keep the totals table sized so its bottom edge always stays on-screen.
+  setupStatsTableAutoFit();
+
   let data;
   try {
     data = await NBA.loadJSON("data/home.json");
@@ -119,5 +122,37 @@
     if (v === null || v === undefined || v === "") return "-";
     if (typeof v === "number" && Number.isInteger(v)) return v;
     return v;
+  }
+
+  // Cap the totals table's scroll area to the space left below it in the viewport,
+  // so the table scrolls internally and its bottom edge is always visible.
+  function setupStatsTableAutoFit() {
+    const wrap = document.querySelector(".stats-table-wrap");
+    if (!wrap) return;
+    const BOTTOM_GAP = 24;    // breathing room below the table
+    const MIN_HEIGHT = 200;   // never collapse smaller than this
+    let scheduled = 0;
+
+    function fit() {
+      const top = wrap.getBoundingClientRect().top;             // real offset from viewport top
+      const available = window.innerHeight - top - BOTTOM_GAP;  // space left below
+      const px = Math.round(Math.max(available, MIN_HEIGHT)) + "px";
+      if (wrap.style.maxHeight !== px) wrap.style.maxHeight = px;
+    }
+    function schedule() {
+      cancelAnimationFrame(scheduled);
+      scheduled = requestAnimationFrame(fit);
+    }
+
+    schedule();
+    window.addEventListener("resize", schedule);
+    window.addEventListener("load", schedule);   // re-fit once web fonts settle
+
+    // Re-fit when rows are injected (data loads async). Observing the table body's
+    // content height won't loop, since capping the wrapper doesn't change that height.
+    const body = document.getElementById("totals-body");
+    if (body && "ResizeObserver" in window) {
+      new ResizeObserver(schedule).observe(body);
+    }
   }
 })();
